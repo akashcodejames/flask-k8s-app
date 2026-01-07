@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flask K8s App</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+        }
+
+        h1 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+
+        .card {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 15px;
+            margin: 20px 0;
+            border-left: 5px solid #667eea;
+        }
+
+        .message {
+            color: #333;
+            font-size: 1.3em;
+            font-weight: 500;
+            margin-bottom: 15px;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 8px 20px;
+            background: #4caf50;
+            color: white;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin: 10px 0;
+        }
+
+        .error {
+            background: #f44336;
+        }
+
+        .loading {
+            background: #ff9800;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 1.1em;
+            border-radius: 30px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-top: 20px;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .info {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 2px solid #e0e0e0;
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .info-item {
+            margin: 10px 0;
+        }
+
+        .info-item strong {
+            color: #667eea;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .card {
+            animation: fadeIn 0.5s ease-out;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Flask K8s App</h1>
+        <p class="subtitle">Deployed on Kubernetes with Ingress</p>
+        
+        <div class="card" id="messageCard" style="display: none;">
+            <div class="message" id="messageText"></div>
+            <div class="status" id="statusBadge">Connected</div>
+        </div>
+
+        <button onclick="fetchMessage()">Fetch Message from Backend</button>
+
+        <div class="info">
+            <div class="info-item">
+                <strong>Frontend:</strong> Nginx serving static HTML
+            </div>
+            <div class="info-item">
+                <strong>Backend:</strong> Flask API on /api routes
+            </div>
+            <div class="info-item">
+                <strong>Domain:</strong> akash.local
+            </div>
+            <div class="info-item">
+                <strong>Ingress:</strong> Path-based routing
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function fetchMessage() {
+            const messageCard = document.getElementById('messageCard');
+            const messageText = document.getElementById('messageText');
+            const statusBadge = document.getElementById('statusBadge');
+
+            // Show loading state
+            messageCard.style.display = 'block';
+            messageText.textContent = 'Loading...';
+            statusBadge.textContent = 'Fetching';
+            statusBadge.className = 'status loading';
+
+            try {
+                const response = await fetch('/api/message');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Display success
+                messageText.textContent = data.message;
+                statusBadge.textContent = data.status.toUpperCase();
+                statusBadge.className = 'status';
+                
+            } catch (error) {
+                // Display error
+                messageText.textContent = `Error: ${error.message}`;
+                statusBadge.textContent = 'Failed';
+                statusBadge.className = 'status error';
+                console.error('Fetch error:', error);
+            }
+        }
+
+        // Fetch message on page load
+        window.addEventListener('load', fetchMessage);
+    </script>
+</body>
+</html>

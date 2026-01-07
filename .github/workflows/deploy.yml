@@ -1,0 +1,131 @@
+name: Build and Deploy to Kind
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'k8s/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata for backend
+      id: meta-backend
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ github.repository }}/backend
+        tags: |
+          type=sha,prefix={{branch}}-
+          type=ref,event=branch
+          type=semver,pattern={{version}}
+          latest
+
+    - name: Build and push backend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./backend
+        push: true
+        tags: ${{ steps.meta-backend.outputs.tags }}
+        labels: ${{ steps.meta-backend.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Extract metadata for frontend
+      id: meta-frontend
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ github.repository }}/frontend
+        tags: |
+          type=sha,prefix={{branch}}-
+          type=ref,event=branch
+          type=semver,pattern={{version}}
+          latest
+
+    - name: Build and push frontend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./frontend
+        push: true
+        tags: ${{ steps.meta-frontend.outputs.tags }}
+        labels: ${{ steps.meta-frontend.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Update deployment manifests
+      run: |
+        # Update backend deployment with new image
+        sed -i "s|image: flask-backend:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/backend:${{ env.IMAGE_TAG }}|g" k8s/backend-deployment.yaml
+        
+        # Update frontend deployment with new image
+        sed -i "s|image: flask-frontend:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/frontend:${{ env.IMAGE_TAG }}|g" k8s/frontend-deployment.yaml
+
+    - name: Create artifact with updated manifests
+      uses: actions/upload-artifact@v4
+      with:
+        name: k8s-manifests
+        path: k8s/
+
+  # This job shows how to deploy to Kind cluster (for local/self-hosted runners)
+  deploy-to-kind:
+    runs-on: self-hosted  # Change this to your self-hosted runner
+    needs: build-and-deploy
+    if: false  # Disabled by default - enable for self-hosted runners
+    
+    steps:
+    - name: Download manifests
+      uses: actions/download-artifact@v4
+      with:
+        name: k8s-manifests
+        path: k8s/
+
+    - name: Load images to Kind
+      run: |
+        kind load docker-image ${{ env.REGISTRY }}/${{ github.repository }}/backend:${{ env.IMAGE_TAG }} --name akash-multi
+        kind load docker-image ${{ env.REGISTRY }}/${{ github.repository }}/frontend:${{ env.IMAGE_TAG }} --name akash-multi
+
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl apply -f k8s/namespace.yaml
+        kubectl apply -f k8s/backend-deployment.yaml
+        kubectl apply -f k8s/backend-service.yaml
+        kubectl apply -f k8s/frontend-deployment.yaml
+        kubectl apply -f k8s/frontend-service.yaml
+        kubectl apply -f k8s/ingress.yaml
+
+    - name: Wait for rollout
+      run: |
+        kubectl rollout status deployment/backend-deployment -n flask-app
+        kubectl rollout status deployment/frontend-deployment -n flask-app
+
+    - name: Verify deployment
+      run: |
+        kubectl get pods -n flask-app
+        kubectl get ingress -n flask-app
