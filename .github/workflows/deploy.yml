@@ -1,4 +1,4 @@
-name: Build and Deploy to Kind
+name: Self-Hosted Local Deployment
 
 on:
   push:
@@ -7,123 +7,33 @@ on:
       - 'backend/**'
       - 'frontend/**'
       - 'k8s/**'
-      - '.github/workflows/**'
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
+    runs-on: self-hosted  # Runs on YOUR Mac M2
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # Add QEMU for multi-arch builds (Critical for Mac M2/ARM64)
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Extract metadata for backend
-      id: meta-backend
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ github.repository }}/backend
-        tags: |
-          type=sha,prefix={{branch}}-
-          type=ref,event=branch
-          type=semver,pattern={{version}}
-          latest
-
-    - name: Build and push backend image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./backend
-        push: true
-        platforms: linux/amd64,linux/arm64
-        tags: ${{ steps.meta-backend.outputs.tags }}
-        labels: ${{ steps.meta-backend.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    - name: Extract metadata for frontend
-      id: meta-frontend
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ github.repository }}/frontend
-        tags: |
-          type=sha,prefix={{branch}}-
-          type=ref,event=branch
-          type=semver,pattern={{version}}
-          latest
-
-    - name: Build and push frontend image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./frontend
-        push: true
-        platforms: linux/amd64,linux/arm64
-        tags: ${{ steps.meta-frontend.outputs.tags }}
-        labels: ${{ steps.meta-frontend.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    - name: Update deployment manifests
+    - name: Build Docker Images Locally
       run: |
-        # Update backend deployment with new image
-        sed -i "s|image: flask-backend:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/backend:${{ env.IMAGE_TAG }}|g" k8s/backend-deployment.yaml
+        echo "🔨 Building backend image..."
+        docker build -t flask-backend:latest ./backend
         
-        # Update frontend deployment with new image
-        sed -i "s|image: flask-frontend:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/frontend:${{ env.IMAGE_TAG }}|g" k8s/frontend-deployment.yaml
+        echo "🔨 Building frontend image..."
+        docker build -t flask-frontend:latest ./frontend
 
-    - name: Create artifact with updated manifests
-      uses: actions/upload-artifact@v4
-      with:
-        name: k8s-manifests
-        path: k8s/
-
-  # Job running on your LOCAL MAC (Self-Hosted Runner)
-  deploy-to-local:
-    runs-on: self-hosted  # Runs on your Mac via runner agent
-    needs: build-and-deploy
-    if: github.event_name == 'push'  # Only deploy on push, not PR
-    
-    steps:
-    - name: Download manifests
-      uses: actions/download-artifact@v4
-      with:
-        name: k8s-manifests
-        path: k8s/
-
-    - name: Pull and Load images to Kind
+    - name: Load Images to Kind
       run: |
-        # Pull the specific tag built in previous job
-        docker pull ${{ env.REGISTRY }}/${{ github.repository }}/backend:${{ env.IMAGE_TAG }}
-        docker pull ${{ env.REGISTRY }}/${{ github.repository }}/frontend:${{ env.IMAGE_TAG }}
-        
-        # Load into Kind cluster (avoiding re-download inside cluster)
-        kind load docker-image ${{ env.REGISTRY }}/${{ github.repository }}/backend:${{ env.IMAGE_TAG }} --name akash-multi
-        kind load docker-image ${{ env.REGISTRY }}/${{ github.repository }}/frontend:${{ env.IMAGE_TAG }} --name akash-multi
+        echo "📦 Loading images to Kind cluster..."
+        kind load docker-image flask-backend:latest --name akash-multi
+        kind load docker-image flask-frontend:latest --name akash-multi
 
     - name: Deploy to Kubernetes
       run: |
+        echo "☸️ Deploying to Kubernetes..."
         kubectl apply -f k8s/namespace.yaml
         kubectl apply -f k8s/backend-deployment.yaml
         kubectl apply -f k8s/backend-service.yaml
@@ -133,17 +43,26 @@ jobs:
 
     - name: Restart Deployments
       run: |
-        # Force restart to pick up new image if tag matches (e.g. latest, though we use SHA tags here)
+        echo "🔄 Restarting deployments to pick up new images..."
         kubectl rollout restart deployment/backend-deployment -n flask-app
         kubectl rollout restart deployment/frontend-deployment -n flask-app
 
-    - name: Wait for rollout
+    - name: Wait for Rollout
       run: |
-        kubectl rollout status deployment/backend-deployment -n flask-app --timeout=60s
-        kubectl rollout status deployment/frontend-deployment -n flask-app --timeout=60s
+        echo "⏳ Waiting for deployments to complete..."
+        kubectl rollout status deployment/backend-deployment -n flask-app --timeout=90s
+        kubectl rollout status deployment/frontend-deployment -n flask-app --timeout=90s
 
-    - name: Final Verification
+    - name: Verify Deployment
       run: |
-        echo "✅ Deployment updated on local Mac!"
+        echo ""
+        echo "✅ Deployment Complete!"
+        echo ""
+        echo "📊 Current Status:"
         kubectl get pods -n flask-app
-
+        echo ""
+        echo "🌐 Application URLs:"
+        echo "   Frontend: http://akash.local"
+        echo "   API:      http://akash.local/api/message"
+        echo ""
+        echo "🎉 Your local cluster has been updated!"
