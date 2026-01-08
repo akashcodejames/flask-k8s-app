@@ -11,7 +11,7 @@ def health():
 @app.route('/api/message')
 def get_message():
     return jsonify({
-        "message": "Hello from Flask Backend v10 from github action nigga !",
+        "message": "Hello from Flask Backend v10 from github action nigga ,nigga maarida nigaa marida!",
         "status": "success",
         "version": "1.0.0"
     }), 200
