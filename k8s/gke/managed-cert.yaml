@@ -1,0 +1,8 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: flask-app-cert
+  namespace: flask-app
+spec:
+  domains:
+    - ssfuture.store

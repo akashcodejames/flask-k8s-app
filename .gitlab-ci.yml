@@ -1,0 +1,149 @@
+stages:
+  - build
+  - deploy
+  - verify
+
+variables:
+  # GCP Configuration (from GitLab CI/CD variables)
+  # GCP_PROJECT_ID, GCP_REGION, GCP_ZONE, GCP_SERVICE_KEY set in GitLab
+  REGISTRY_URL: ${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}
+
+# Build backend using Cloud Build
+build:backend:
+  stage: build
+  image: google/cloud-sdk:alpine
+  before_script:
+    # Authenticate to GCP
+    - echo $GCP_SERVICE_KEY | base64 -d > ${HOME}/gcp-key.json
+    - gcloud auth activate-service-account --key-file ${HOME}/gcp-key.json
+    - gcloud config set project $GCP_PROJECT_ID
+  script:
+    - echo "🔨 Building backend using Cloud Build..."
+    - |
+      gcloud builds submit \
+        --config=cloudbuild-backend.yaml \
+        --region=$GCP_REGION \
+        --substitutions=SHORT_SHA=${CI_COMMIT_SHORT_SHA} \
+        .
+    - echo "✅ Backend build submitted to Cloud Build"
+  after_script:
+    - rm -f ${HOME}/gcp-key.json
+  only:
+    - main
+    - develop
+  tags:
+    - docker
+
+# Build frontend using Cloud Build
+build:frontend:
+  stage: build
+  image: google/cloud-sdk:alpine
+  before_script:
+    - echo $GCP_SERVICE_KEY | base64 -d > ${HOME}/gcp-key.json
+    - gcloud auth activate-service-account --key-file ${HOME}/gcp-key.json
+    - gcloud config set project $GCP_PROJECT_ID
+  script:
+    - echo "🔨 Building frontend using Cloud Build..."
+    - |
+      gcloud builds submit \
+        --config=cloudbuild-frontend.yaml \
+        --region=$GCP_REGION \
+        --substitutions=SHORT_SHA=${CI_COMMIT_SHORT_SHA} \
+        .
+    - echo "✅ Frontend build submitted to Cloud Build"
+  after_script:
+    - rm -f ${HOME}/gcp-key.json
+  only:
+    - main
+    - develop
+  tags:
+    - docker
+
+# Deploy to GKE (Production)
+deploy:production:
+  stage: deploy
+  image: google/cloud-sdk:alpine
+  environment:
+    name: production
+    url: https://ssfuture.store
+  when: manual  # Requires manual approval for production
+  before_script:
+    # Authenticate to GCP
+    - echo $GCP_SERVICE_KEY | base64 -d > ${HOME}/gcp-key.json
+    - gcloud auth activate-service-account --key-file ${HOME}/gcp-key.json
+    - gcloud config set project $GCP_PROJECT_ID
+    # Install kubectl
+    - gcloud components install kubectl --quiet
+    # Get GKE credentials
+    - gcloud container clusters get-credentials $GKE_CLUSTER_NAME --zone=$GCP_ZONE --project=$GCP_PROJECT_ID
+  script:
+    - echo "🚀 Deploying to GKE cluster..."
+    - echo "Image tag: ${CI_COMMIT_SHORT_SHA}"
+    - export IMAGE_TAG=${CI_COMMIT_SHORT_SHA}
+    
+    # Update deployment manifests with new image tags
+    - |
+      sed -i "s|image:.*backend:.*|image: $REGISTRY_URL/backend:$IMAGE_TAG|g" k8s/gke/backend-deployment.yaml
+      sed -i "s|image:.*frontend:.*|image: $REGISTRY_URL/frontend:$IMAGE_TAG|g" k8s/gke/frontend-deployment.yaml
+    
+    # Apply all Kubernetes manifests
+    - echo "📦 Applying Kubernetes manifests..."
+    - kubectl apply -f k8s/gke/namespace.yaml
+    - kubectl apply -f k8s/gke/backend-backendconfig.yaml
+    - kubectl apply -f k8s/gke/frontend-backendconfig.yaml
+    - kubectl apply -f k8s/gke/backend-deployment.yaml
+    - kubectl apply -f k8s/gke/backend-service.yaml
+    - kubectl apply -f k8s/gke/frontend-deployment.yaml
+    - kubectl apply -f k8s/gke/frontend-service.yaml
+    - kubectl apply -f k8s/gke/managed-cert.yaml
+    - kubectl apply -f k8s/gke/ingress.yaml
+    
+    # Wait for rollout to complete
+    - echo "⏳ Waiting for rollout to complete..."
+    - kubectl rollout status deployment/backend-deployment -n $KUBE_NAMESPACE --timeout=5m
+    - kubectl rollout status deployment/frontend-deployment -n $KUBE_NAMESPACE --timeout=5m
+    
+    - echo "✅ Deployment complete!"
+    - echo "Frontend: https://ssfuture.store"
+    - echo "API: https://ssfuture.store/api/message"
+  after_script:
+    - rm -f ${HOME}/gcp-key.json
+  only:
+    - main
+  tags:
+    - docker
+
+# Verify deployment
+verify:deployment:
+  stage: verify
+  image: google/cloud-sdk:alpine
+  before_script:
+    - echo $GCP_SERVICE_KEY | base64 -d > ${HOME}/gcp-key.json
+    - gcloud auth activate-service-account --key-file ${HOME}/gcp-key.json
+    - gcloud config set project $GCP_PROJECT_ID
+    - gcloud components install kubectl --quiet
+    - gcloud container clusters get-credentials $GKE_CLUSTER_NAME --zone=$GCP_ZONE --project=$GCP_PROJECT_ID
+  script:
+    - echo "🔍 Verifying deployment..."
+    - echo ""
+    - echo "📊 Pod Status:"
+    - kubectl get pods -n $KUBE_NAMESPACE
+    - echo ""
+    - echo "🌐 Services:"
+    - kubectl get svc -n $KUBE_NAMESPACE
+    - echo ""
+    - echo "🔗 Ingress:"
+    - kubectl get ingress -n $KUBE_NAMESPACE
+    - echo ""
+    - echo "🎯 Image Versions:"
+    - kubectl get deployment backend-deployment -n $KUBE_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].image}'
+    - echo ""
+    - kubectl get deployment frontend-deployment -n $KUBE_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].image}'
+    - echo ""
+    - echo "✅ Verification complete!"
+  after_script:
+    - rm -f ${HOME}/gcp-key.json
+  only:
+    - main
+  tags:
+    - docker

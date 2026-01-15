@@ -14,3 +14,4 @@ echo "Press Ctrl+C to stop the port-forward"
 echo ""
 
 kubectl port-forward -n flask-app svc/frontend-service 8080:80
+
